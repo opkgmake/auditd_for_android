@@ -40,32 +40,14 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    # 2. 分析项目结构
-    - name: Analyze project structure
-      id: project-structure
-      run: |
-        # 查找可能的项目根目录
-        if [ -d "auditd_for_android" ]; then
-          echo "Found project in 'auditd_for_android' directory"
-          echo "PROJECT_ROOT=auditd_for_android" >> $GITHUB_ENV
-        else
-          echo "Using repository root as project directory"
-          echo "PROJECT_ROOT=." >> $GITHUB_ENV
-        fi
-        
-        # 列出目录结构用于调试
-        echo "Project structure:"
-        find $PROJECT_ROOT -maxdepth 2 -type d | sort
-
-    # 3. 设置 Java 11 用于 Android SDK
+    # 2. 设置 Java 11 用于 Android SDK
     - name: Set up JDK 11 for Android SDK
       uses: actions/setup-java@v3
       with:
         java-version: '11'
         distribution: 'temurin'
-        cache: 'gradle'
 
-    # 4. 安装 Android SDK 和 NDK
+    # 3. 安装 Android SDK 和 NDK
     - name: Setup Android SDK and NDK
       run: |
         # 创建 SDK 目录
@@ -95,87 +77,51 @@ jobs:
         echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
         echo "PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/ndk/25.1.8937393:$PATH" >> $GITHUB_ENV
 
-    # 5. 构建原生组件 (使用动态路径)
+    # 4. 构建原生组件 - 根据实际目录结构调整
     - name: Build native binaries
       run: |
         echo "Building native components for $TARGET_ABI"
         export APP_ABI=$TARGET_ABI
         
-        # 进入项目根目录
-        cd $PROJECT_ROOT
+        # 进入auditd_port目录构建ausearch和auparse
+        cd auditd_port
         
-        # 动态查找组件目录
-        components=()
-        if [ -d "auditd" ]; then
-          components+=("auditd")
-        elif [ -d "src/auditd" ]; then
-          components+=("src/auditd")
-        fi
+        # 构建ausearch
+        echo "Building ausearch..."
+        cd ausearch
+        $NDK_HOME/ndk-build NDK_APPLICATION_MK=./Application.mk
+        cd ..
         
-        if [ -d "forensikmediator" ]; then
-          components+=("forensikmediator")
-        elif [ -d "src/forensikmediator" ]; then
-          components+=("src/forensikmediator")
-        fi
+        # 构建auparse
+        echo "Building auparse..."
+        cd auparse
+        $NDK_HOME/ndk-build NDK_APPLICATION_MK=./Application.mk
+        cd ..
         
-        if [ -d "audit-dispatch" ]; then
-          components+=("audit-dispatch")
-        elif [ -d "src/audit-dispatch" ]; then
-          components+=("src/audit-dispatch")
-        fi
+        # 返回到项目根目录
+        cd ..
         
-        if [ ${#components[@]} -eq 0 ]; then
-          echo "::error::No component directories found!"
-          find . -maxdepth 3 -type d
-          exit 1
-        fi
+        # 构建audit_system_components
+        echo "Building audit_system_components..."
+        cd audit_system_components
+        $NDK_HOME/ndk-build NDK_APPLICATION_MK=./Application.mk
+        cd ..
         
-        echo "Found components: ${components[*]}"
-        
-        # 构建所有原生组件
-        for component in "${components[@]}"; do
-          echo "Building $component..."
-          cd $component
-          
-          # 使用 ndk-build 编译
-          $NDK_HOME/ndk-build NDK_APPLICATION_MK=./Application.mk
-          
-          # 检查输出文件
-          ls -l libs/$TARGET_ABI/
-          cd ..
-        done
+        # 列出所有生成的二进制文件
+        find . -name "*.so" -o -name "auditd" -o -name "ausearch" -o -name "auparse"
 
-    # 6. 切换到 Java 8 用于构建 Android 应用
+    # 5. 切换到 Java 8 用于构建 Android 应用
     - name: Set up JDK 8 for Gradle
       uses: actions/setup-java@v3
       with:
         java-version: '8'
         distribution: 'temurin'
-        cache: 'gradle'
 
-    # 7. 构建 Android 应用 (使用动态路径)
+    # 6. 构建 Android 应用 - 根据实际目录app/
     - name: Build Android APK
       run: |
-        cd $PROJECT_ROOT
-        
-        # 动态查找 Android 应用目录
-        if [ -d "AndroidForensik" ]; then
-          echo "Building APK from AndroidForensik directory"
-          cd AndroidForensik
-        elif [ -d "android-forensik" ]; then
-          echo "Building APK from android-forensik directory"
-          cd android-forensik
-        elif [ -d "app" ]; then
-          echo "Building APK from app directory"
-          cd app
-        elif [ -d "src/android" ]; then
-          echo "Building APK from src/android directory"
-          cd src/android
-        else
-          echo "::error::Could not find Android application directory"
-          find . -maxdepth 3 -type d
-          exit 1
-        fi
+        echo "Building Android APK..."
+        cd app
         
         # 添加 gradlew 执行权限
         chmod +x gradlew
@@ -186,7 +132,7 @@ jobs:
         # 列出生成的 APK
         find . -name "*.apk"
 
-    # 8. 准备部署包
+    # 7. 准备部署包
     - name: Prepare deployment package
       run: |
         # 创建部署目录
@@ -194,31 +140,76 @@ jobs:
         mkdir -p $DEPLOY_DIR/system/bin
         
         # 复制原生二进制文件
-        if [ -d "$PROJECT_ROOT/auditd/libs/$TARGET_ABI" ]; then
-          cp $PROJECT_ROOT/auditd/libs/$TARGET_ABI/auditd $DEPLOY_DIR/system/bin/
-        elif [ -d "$PROJECT_ROOT/src/auditd/libs/$TARGET_ABI" ]; then
-          cp $PROJECT_ROOT/src/auditd/libs/$TARGET_ABI/auditd $DEPLOY_DIR/system/bin/
-        fi
+        # ausearch
+        cp auditd_port/ausearch/libs/$TARGET_ABI/ausearch $DEPLOY_DIR/system/bin/
         
-        if [ -d "$PROJECT_ROOT/forensikmediator/libs/$TARGET_ABI" ]; then
-          cp $PROJECT_ROOT/forensikmediator/libs/$TARGET_ABI/forensikmediator $DEPLOY_DIR/system/bin/
-        elif [ -d "$PROJECT_ROOT/src/forensikmediator/libs/$TARGET_ABI" ]; then
-          cp $PROJECT_ROOT/src/forensikmediator/libs/$TARGET_ABI/forensikmediator $DEPLOY_DIR/system/bin/
-        fi
+        # auparse
+        cp auditd_port/auparse/libs/$TARGET_ABI/auparse $DEPLOY_DIR/system/bin/
         
-        if [ -d "$PROJECT_ROOT/audit-dispatch/libs/$TARGET_ABI" ]; then
-          cp $PROJECT_ROOT/audit-dispatch/libs/$TARGET_ABI/audit-dispatch $DEPLOY_DIR/system/bin/
-        elif [ -d "$PROJECT_ROOT/src/audit-dispatch/libs/$TARGET_ABI" ]; then
-          cp $PROJECT_ROOT/src/audit-dispatch/libs/$TARGET_ABI/audit-dispatch $DEPLOY_DIR/system/bin/
-        fi
+        # audit_system_components (包含auditd, forensikmediator, audit-dispatch)
+        cp audit_system_components/libs/$TARGET_ABI/* $DEPLOY_DIR/system/bin/
         
         # 复制 APK 文件
-        find . -path "*/app/build/outputs/apk/$BUILD_TYPE/*.apk" -exec cp {} $DEPLOY_DIR/ \;
+        find app -path "*/build/outputs/apk/$BUILD_TYPE/*.apk" -exec cp {} $DEPLOY_DIR/ \;
+        
+        # 创建服务配置文件
+        cat > $DEPLOY_DIR/system/etc/init.d/audit_services.rc <<EOF
+        service auditd /system/bin/auditd
+            class main
+            user root
+            group root
+            seclabel u:r:init:s0
+            oneshot
+
+        service forensikmediator /system/bin/forensikmediator
+            class main
+            user root
+            group root
+            seclabel u:r:init:s0
+            oneshot
+
+        service audit-dispatch /system/bin/audit-dispatch
+            class main
+            user root
+            group root
+            seclabel u:r:init:s0
+            oneshot
+        EOF
+        
+        # 创建SQLite迁移脚本
+        cat > $DEPLOY_DIR/migrate_to_sqlite.sh <<'EOF'
+        #!/system/bin/sh
+        # 创建SQLite数据库
+        SQLITE_DB="/data/audit_events.db"
+        sqlite3 $SQLITE_DB "CREATE TABLE IF NOT EXISTS audit_events (
+            id INTEGER PRIMARY KEY,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+            uid INTEGER,
+            pid INTEGER,
+            syscall INTEGER,
+            result TEXT,
+            details TEXT
+        );"
+        
+        # 迁移现有日志
+        if [ -f "/storage/audit_stream.txt" ]; then
+            while IFS= read -r line; do
+                sqlite3 $SQLITE_DB "INSERT INTO audit_events (details) VALUES ('$line');"
+            done < "/storage/audit_stream.txt"
+            mv "/storage/audit_stream.txt" "/storage/audit_stream.txt.backup"
+        fi
+        
+        # 修改audit-dispatch配置
+        sed -i 's|/storage/audit_stream.txt|sqlite:///data/audit_events.db|' /system/bin/audit-dispatch
+        
+        echo "Migration to SQLite completed!"
+        EOF
+        chmod +x $DEPLOY_DIR/migrate_to_sqlite.sh
         
         # 打包部署文件
         zip -r $DEPLOY_DIR.zip $DEPLOY_DIR
 
-    # 9. 上传构建产物
+    # 8. 上传构建产物
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
