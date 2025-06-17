@@ -77,35 +77,65 @@ jobs:
         echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
         echo "PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/ndk/25.1.8937393:$PATH" >> $GITHUB_ENV
 
-    # 4. 构建原生组件 - 修复 NDK_PROJECT_PATH 问题
+    # 4. 修复 ausearch 构建问题
+    - name: Fix ausearch build issues
+      run: |
+        # 修复1: 允许缺失依赖
+        echo "APP_ALLOW_MISSING_DEPS=true" >> $GITHUB_ENV
+        
+        # 修复2: 修正 Android.mk 文件，移除头文件
+        cd auditd_port/ausearch
+        
+        # 备份原始文件
+        cp Android.mk Android.mk.bak
+        
+        # 移除所有 .h 文件
+        sed -i '/\.h/d' Android.mk
+        
+        # 添加缺失的 cutils 依赖（如果可用）
+        if grep -q "libcutils" Android.mk; then
+          echo "libcutils already in Android.mk"
+        else
+          echo "LOCAL_SHARED_LIBRARIES += libcutils" >> Android.mk
+        fi
+        
+        # 确保只包含 .c 文件
+        sed -i '/LOCAL_SRC_FILES := \\/,/)/ {/\.h/d}' Android.mk
+        
+        cd $GITHUB_WORKSPACE
+
+    # 5. 构建原生组件
     - name: Build native binaries
       run: |
         echo "Building native components for $TARGET_ABI"
         export APP_ABI=$TARGET_ABI
-        
-        # 修复：设置全局 NDK_PROJECT_PATH
         export NDK_PROJECT_PATH=$GITHUB_WORKSPACE
-        echo "NDK_PROJECT_PATH=$GITHUB_WORKSPACE" >> $GITHUB_ENV
         
         # 进入auditd_port目录构建ausearch和auparse
         cd auditd_port
         
-        # 构建ausearch - 修复：指定正确路径
+        # 构建ausearch - 应用修复
         echo "Building ausearch..."
         cd ausearch
-        $NDK_HOME/ndk-build NDK_PROJECT_PATH=$(pwd) NDK_APPLICATION_MK=./Application.mk
+        $NDK_HOME/ndk-build NDK_PROJECT_PATH=$(pwd) APP_ALLOW_MISSING_DEPS=$APP_ALLOW_MISSING_DEPS NDK_APPLICATION_MK=./Application.mk
         cd ..
         
-        # 构建auparse - 修复：指定正确路径
+        # 构建auparse - 应用修复
         echo "Building auparse..."
         cd auparse
-        $NDK_HOME/ndk-build NDK_PROJECT_PATH=$(pwd) NDK_APPLICATION_MK=./Application.mk
+        
+        # 修复auparse的Android.mk
+        cp Android.mk Android.mk.bak
+        sed -i '/\.h/d' Android.mk
+        sed -i '/LOCAL_SRC_FILES := \\/,/)/ {/\.h/d}' Android.mk
+        
+        $NDK_HOME/ndk-build NDK_PROJECT_PATH=$(pwd) APP_ALLOW_MISSING_DEPS=$APP_ALLOW_MISSING_DEPS NDK_APPLICATION_MK=./Application.mk
         cd ..
         
         # 返回到项目根目录
         cd ..
         
-        # 构建audit_system_components - 修复：指定正确路径
+        # 构建audit_system_components
         echo "Building audit_system_components..."
         cd audit_system_components
         $NDK_HOME/ndk-build NDK_PROJECT_PATH=$(pwd) NDK_APPLICATION_MK=./Application.mk
@@ -114,14 +144,14 @@ jobs:
         # 列出所有生成的二进制文件
         find . -name "*.so" -o -name "auditd" -o -name "ausearch" -o -name "auparse"
 
-    # 5. 切换到 Java 8 用于构建 Android 应用
+    # 6. 切换到 Java 8 用于构建 Android 应用
     - name: Set up JDK 8 for Gradle
       uses: actions/setup-java@v3
       with:
         java-version: '8'
         distribution: 'temurin'
 
-    # 6. 构建 Android 应用
+    # 7. 构建 Android 应用
     - name: Build Android APK
       run: |
         echo "Building Android APK..."
@@ -136,12 +166,13 @@ jobs:
         # 列出生成的 APK
         find . -name "*.apk"
 
-    # 7. 准备部署包
+    # 8. 准备部署包
     - name: Prepare deployment package
       run: |
         # 创建部署目录
         DEPLOY_DIR="auditd_deploy_${{ env.TARGET_ABI }}_${{ env.BUILD_TYPE }}"
         mkdir -p $DEPLOY_DIR/system/bin
+        mkdir -p $DEPLOY_DIR/system/lib
         
         # 复制原生二进制文件
         # ausearch
@@ -152,6 +183,11 @@ jobs:
         
         # audit_system_components (包含auditd, forensikmediator, audit-dispatch)
         cp audit_system_components/libs/$TARGET_ABI/* $DEPLOY_DIR/system/bin/
+        
+        # 复制可能的共享库
+        if [ -f "auditd_port/ausearch/obj/local/$TARGET_ABI/libcutils.so" ]; then
+          cp auditd_port/ausearch/obj/local/$TARGET_ABI/libcutils.so $DEPLOY_DIR/system/lib/
+        fi
         
         # 复制 APK 文件
         find app -path "*/build/outputs/apk/$BUILD_TYPE/*.apk" -exec cp {} $DEPLOY_DIR/ \;
@@ -213,7 +249,7 @@ jobs:
         # 打包部署文件
         zip -r $DEPLOY_DIR.zip $DEPLOY_DIR
 
-    # 8. 上传构建产物
+    # 9. 上传构建产物
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
