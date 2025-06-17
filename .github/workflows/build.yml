@@ -40,11 +40,11 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    # 2. 设置 JDK 17
-    - name: Set up JDK 17
+    # 2. 设置兼容的 JDK 版本
+    - name: Set up JDK 11
       uses: actions/setup-java@v3
       with:
-        java-version: '17'
+        java-version: '11'  # 使用兼容 Gradle 4.1 的 JDK 11
         distribution: 'temurin'
 
     # 3. 安装 Android SDK 和 NDK
@@ -105,7 +105,7 @@ jobs:
         
         find . -name "*.so" -o -name "auditd" -o -name "forensikmediator" -o -name "audit-dispatch"
 
-    # 6. 修复：添加 gradlew 执行权限
+    # 6. 修复：升级 Gradle 版本或使用兼容的 Java 版本
     - name: Build Android APK
       run: |
         # 确保在项目根目录
@@ -127,11 +127,11 @@ jobs:
           exit 1
         fi
         
-        # 修复：添加 gradlew 执行权限
+        # 添加 gradlew 执行权限
         chmod +x gradlew
         
-        # 执行构建
-        ./gradlew assemble$GRADLE_BUILD_TYPE
+        # 修复：使用兼容的 Java 版本运行 Gradle
+        JAVA_HOME=$JAVA_HOME_11_X64 ./gradlew assemble$GRADLE_BUILD_TYPE
         
         # 列出生成的 APK
         find . -name "*.apk"
