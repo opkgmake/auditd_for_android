@@ -31,7 +31,6 @@ jobs:
   build:
     runs-on: ubuntu-latest
     
-    # 移除矩阵策略，改用直接的环境变量设置
     env:
       TARGET_ABI: ${{ github.event.inputs.target_abi || 'arm64-v8a' }}
       BUILD_TYPE: ${{ github.event.inputs.build_type || 'debug' }}
@@ -56,7 +55,6 @@ jobs:
 
     # 4. 设置构建类型变量
     - name: Set Gradle build type
-      id: set_gradle_type
       run: |
         if [ "$BUILD_TYPE" = "release" ]; then
           echo "GRADLE_BUILD_TYPE=Release" >> $GITHUB_ENV
@@ -68,16 +66,12 @@ jobs:
     - name: Build native binaries
       run: |
         echo "Building for $TARGET_ABI ($BUILD_TYPE)"
-        
-        # 设置 ABI 参数
         export APP_ABI=$TARGET_ABI
         
-        # 编译所有组件
         cd auditd && ./build.sh
         cd ../forensikmediator && ./build.sh
         cd ../audit-dispatch && ./build.sh
         
-        # 列出生成的二进制文件
         find . -name "*.so" -o -name "auditd" -o -name "forensikmediator" -o -name "audit-dispatch"
 
     # 6. 编译 Android 应用
@@ -87,9 +81,9 @@ jobs:
         ./gradlew assemble$GRADLE_BUILD_TYPE
         ls -l app/build/outputs/apk/$GRADLE_BUILD_TYPE/
 
-    # 7. 上传构建产物
+    # 7. 上传构建产物 (修复：升级到 v4)
     - name: Upload artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4  # 修复：从 v3 升级到 v4
       with:
         name: auditd_binaries_${{ env.TARGET_ABI }}_${{ env.BUILD_TYPE }}
         path: |
