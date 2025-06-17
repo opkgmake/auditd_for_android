@@ -77,34 +77,38 @@ jobs:
         echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
         echo "PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/ndk/25.1.8937393:$PATH" >> $GITHUB_ENV
 
-    # 4. 构建原生组件 - 根据实际目录结构调整
+    # 4. 构建原生组件 - 修复 NDK_PROJECT_PATH 问题
     - name: Build native binaries
       run: |
         echo "Building native components for $TARGET_ABI"
         export APP_ABI=$TARGET_ABI
         
+        # 修复：设置全局 NDK_PROJECT_PATH
+        export NDK_PROJECT_PATH=$GITHUB_WORKSPACE
+        echo "NDK_PROJECT_PATH=$GITHUB_WORKSPACE" >> $GITHUB_ENV
+        
         # 进入auditd_port目录构建ausearch和auparse
         cd auditd_port
         
-        # 构建ausearch
+        # 构建ausearch - 修复：指定正确路径
         echo "Building ausearch..."
         cd ausearch
-        $NDK_HOME/ndk-build NDK_APPLICATION_MK=./Application.mk
+        $NDK_HOME/ndk-build NDK_PROJECT_PATH=$(pwd) NDK_APPLICATION_MK=./Application.mk
         cd ..
         
-        # 构建auparse
+        # 构建auparse - 修复：指定正确路径
         echo "Building auparse..."
         cd auparse
-        $NDK_HOME/ndk-build NDK_APPLICATION_MK=./Application.mk
+        $NDK_HOME/ndk-build NDK_PROJECT_PATH=$(pwd) NDK_APPLICATION_MK=./Application.mk
         cd ..
         
         # 返回到项目根目录
         cd ..
         
-        # 构建audit_system_components
+        # 构建audit_system_components - 修复：指定正确路径
         echo "Building audit_system_components..."
         cd audit_system_components
-        $NDK_HOME/ndk-build NDK_APPLICATION_MK=./Application.mk
+        $NDK_HOME/ndk-build NDK_PROJECT_PATH=$(pwd) NDK_APPLICATION_MK=./Application.mk
         cd ..
         
         # 列出所有生成的二进制文件
@@ -117,7 +121,7 @@ jobs:
         java-version: '8'
         distribution: 'temurin'
 
-    # 6. 构建 Android 应用 - 根据实际目录app/
+    # 6. 构建 Android 应用
     - name: Build Android APK
       run: |
         echo "Building Android APK..."
