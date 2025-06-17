@@ -1,16 +1,8 @@
-name: Android Auditd CI
+name: Android Auditd Binaries
 
 on:
   workflow_dispatch:
     inputs:
-      build_type:
-        description: '选择构建类型'
-        required: true
-        default: 'debug'
-        type: choice
-        options:
-          - debug
-          - release
       target_abi:
         description: '目标设备架构'
         required: true
@@ -19,240 +11,111 @@ on:
         options:
           - armeabi-v7a
           - arm64-v8a
-          - x86
-          - x86_64
-          
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    container: 
+      image: silkeh/clang:android-ndk
+      options: --privileged
     
     env:
       TARGET_ABI: ${{ github.event.inputs.target_abi || 'arm64-v8a' }}
-      BUILD_TYPE: ${{ github.event.inputs.build_type || 'debug' }}
+      NDK_HOME: /opt/android-ndk
 
     steps:
     # 1. 检出代码
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    # 2. 设置 Java 11 用于 Android SDK
-    - name: Set up JDK 11 for Android SDK
-      uses: actions/setup-java@v3
-      with:
-        java-version: '11'
-        distribution: 'temurin'
-
-    # 3. 安装 Android SDK 和 NDK
-    - name: Setup Android SDK and NDK
+    # 2. 设置构建环境
+    - name: Setup environment
       run: |
-        # 创建 SDK 目录
-        mkdir -p android-sdk
+        # 创建输出目录
+        mkdir -p binaries/$TARGET_ABI
         
-        # 下载命令行工具
-        wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
-        unzip -q commandlinetools-linux-*.zip -d cmdline-tools
-        
-        # 组织目录结构
-        mkdir -p android-sdk/cmdline-tools/latest
-        mv cmdline-tools/cmdline-tools/* android-sdk/cmdline-tools/latest/
-        rm -rf cmdline-tools
-        
-        # 设置环境变量
-        export ANDROID_HOME=$PWD/android-sdk
-        export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$PATH
-        
-        # 接受许可
-        yes | sdkmanager --licenses >/dev/null 2>&1
-        
-        # 安装指定版本的 NDK
-        sdkmanager "ndk;25.1.8937393"
-        
-        # 设置环境变量供后续步骤使用
-        echo "NDK_HOME=$ANDROID_HOME/ndk/25.1.8937393" >> $GITHUB_ENV
-        echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
-        echo "PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/ndk/25.1.8937393:$PATH" >> $GITHUB_ENV
-
-    # 4. 修复 NDK 构建路径问题
-    - name: Fix NDK build paths
-      run: |
-        # 为每个组件创建 jni 目录
-        mkdir -p auditd_port/ausearch/jni
-        mkdir -p auditd_port/auparse/jni
-        mkdir -p audit_system_components/jni
-        
-        # 移动 ausearch 构建文件
-        mv auditd_port/ausearch/Android.mk auditd_port/ausearch/jni/
-        mv auditd_port/ausearch/Application.mk auditd_port/ausearch/jni/
-        
-        # 移动 auparse 构建文件
-        mv auditd_port/auparse/Android.mk auditd_port/auparse/jni/
-        mv auditd_port/auparse/Application.mk auditd_port/auparse/jni/
-        
-        # 为 audit_system_components 创建构建文件
-        cat > audit_system_components/jni/Android.mk <<'EOF'
-        LOCAL_PATH := $(call my-dir)
-        include $(CLEAR_VARS)
-        
-        LOCAL_MODULE := audit_system
-        LOCAL_SRC_FILES := \
-            ../src/main.c \
-            ../src/auditd.c \
-            ../src/forensikmediator.c \
-            ../src/audit-dispatch.c
-        
-        LOCAL_C_INCLUDES := \
-            $(LOCAL_PATH)/../include \
-            $(NDK_HOME)/sysroot/usr/include
-        
-        LOCAL_LDLIBS := -llog -lcutils
-        
-        include $(BUILD_EXECUTABLE)
-        EOF
-        
-        cat > audit_system_components/jni/Application.mk <<'EOF'
-        APP_PLATFORM := android-21
-        APP_ABI := $(TARGET_ABI)
-        APP_ALLOW_MISSING_DEPS := true
-        APP_STL := c++_static
-        EOF
-
-    # 5. 构建原生组件
-    - name: Build native binaries
-      run: |
-        echo "Building native components for $TARGET_ABI"
-        export APP_ABI=$TARGET_ABI
-        
-        # 构建ausearch
-        echo "Building ausearch..."
-        cd auditd_port/ausearch
-        $NDK_HOME/ndk-build NDK_PROJECT_PATH=$(pwd)
-        cd ../..
-        
-        # 构建auparse
-        echo "Building auparse..."
-        cd auditd_port/auparse
-        $NDK_HOME/ndk-build NDK_PROJECT_PATH=$(pwd)
-        cd ../..
-        
-        # 构建audit_system_components
-        echo "Building audit_system_components..."
-        cd audit_system_components
-        $NDK_HOME/ndk-build NDK_PROJECT_PATH=$(pwd)
-        cd ..
-        
-        # 列出所有生成的二进制文件
-        find . -name "ausearch" -o -name "auparse" -o -name "audit_system"
-
-    # 6. 切换到 Java 8 用于构建 Android 应用
-    - name: Set up JDK 8 for Gradle
-      uses: actions/setup-java@v3
-      with:
-        java-version: '8'
-        distribution: 'temurin'
-
-    # 7. 构建 Android 应用
-    - name: Build Android APK
-      run: |
-        echo "Building Android APK..."
-        cd app
-        
-        # 添加 gradlew 执行权限
-        chmod +x gradlew
-        
-        # 使用 JDK 8 运行 Gradle
-        ./gradlew assemble$BUILD_TYPE
-        
-        # 列出生成的 APK
-        find . -name "*.apk"
-
-    # 8. 准备部署包
-    - name: Prepare deployment package
-      run: |
-        # 创建部署目录
-        DEPLOY_DIR="auditd_deploy_${{ env.TARGET_ABI }}_${{ env.BUILD_TYPE }}"
-        mkdir -p $DEPLOY_DIR/system/bin
-        
-        # 复制原生二进制文件
-        cp auditd_port/ausearch/libs/$TARGET_ABI/ausearch $DEPLOY_DIR/system/bin/
-        cp auditd_port/auparse/libs/$TARGET_ABI/auparse $DEPLOY_DIR/system/bin/
-        cp audit_system_components/libs/$TARGET_ABI/audit_system $DEPLOY_DIR/system/bin/
-        
-        # 重命名 audit_system 为实际组件
-        cd $DEPLOY_DIR/system/bin
-        ln -s audit_system auditd
-        ln -s audit_system forensikmediator
-        ln -s audit_system audit-dispatch
-        cd -
-        
-        # 复制 APK 文件
-        find app -path "*/build/outputs/apk/$BUILD_TYPE/*.apk" -exec cp {} $DEPLOY_DIR/ \;
-        
-        # 创建服务配置文件
-        cat > $DEPLOY_DIR/system/etc/init.d/audit_services.rc <<EOF
-        service auditd /system/bin/auditd
-            class main
-            user root
-            group root
-            seclabel u:r:init:s0
-            oneshot
-
-        service forensikmediator /system/bin/forensikmediator
-            class main
-            user root
-            group root
-            seclabel u:r:init:s0
-            oneshot
-
-        service audit-dispatch /system/bin/audit-dispatch
-            class main
-            user root
-            group root
-            seclabel u:r:init:s0
-            oneshot
-        EOF
-        
-        # 创建SQLite迁移脚本
-        cat > $DEPLOY_DIR/migrate_to_sqlite.sh <<'EOF'
-        #!/system/bin/sh
-        # 创建SQLite数据库
-        SQLITE_DB="/data/audit_events.db"
-        sqlite3 $SQLITE_DB "CREATE TABLE IF NOT EXISTS audit_events (
-            id INTEGER PRIMARY KEY,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-            uid INTEGER,
-            pid INTEGER,
-            syscall INTEGER,
-            result TEXT,
-            details TEXT
-        );"
-        
-        # 迁移现有日志
-        if [ -f "/storage/audit_stream.txt" ]; then
-            while IFS= read -r line; do
-                sqlite3 $SQLITE_DB "INSERT INTO audit_events (details) VALUES ('$line');"
-            done < "/storage/audit_stream.txt"
-            mv "/storage/audit_stream.txt" "/storage/audit_stream.txt.backup"
+        # 设置工具链路径
+        if [ "$TARGET_ABI" = "armeabi-v7a" ]; then
+          export TOOLCHAIN=$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi
+          export TARGET=armv7a-linux-androideabi
+        else
+          export TOOLCHAIN=$NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android
+          export TARGET=aarch64-linux-android
         fi
         
-        # 修改audit-dispatch配置
-        sed -i 's|/storage/audit_stream.txt|sqlite:///data/audit_events.db|' /system/bin/audit-dispatch
-        
-        echo "Migration to SQLite completed!"
-        EOF
-        chmod +x $DEPLOY_DIR/migrate_to_sqlite.sh
-        
-        # 打包部署文件
-        zip -r $DEPLOY_DIR.zip $DEPLOY_DIR
+        echo "TOOLCHAIN=$TOOLCHAIN" >> $GITHUB_ENV
+        echo "TARGET=$TARGET" >> $GITHUB_ENV
 
-    # 9. 上传构建产物
-    - name: Upload artifacts
+    # 3. 直接编译核心组件
+    - name: Build ausearch
+      run: |
+        cd auditd_port/ausearch/src
+        
+        # 直接编译 ausearch
+        $TOOLCHAIN$TARGET-clang \
+          -I../include \
+          -I../../auparse \
+          -D_GNU_SOURCE \
+          *.c \
+          -o $GITHUB_WORKSPACE/binaries/$TARGET_ABI/ausearch
+        
+        strip $GITHUB_WORKSPACE/binaries/$TARGET_ABI/ausearch
+
+    - name: Build auparse
+      run: |
+        cd auditd_port/auparse/src
+        
+        # 直接编译 auparse
+        $TOOLCHAIN$TARGET-clang \
+          -I../include \
+          -D_GNU_SOURCE \
+          *.c \
+          -o $GITHUB_WORKSPACE/binaries/$TARGET_ABI/auparse
+        
+        strip $GITHUB_WORKSPACE/binaries/$TARGET_ABI/auparse
+
+    - name: Build auditd
+      run: |
+        cd audit_system_components/src
+        
+        # 直接编译 auditd
+        $TOOLCHAIN$TARGET-clang \
+          -I../include \
+          -D_GNU_SOURCE \
+          auditd.c \
+          -o $GITHUB_WORKSPACE/binaries/$TARGET_ABI/auditd
+        
+        strip $GITHUB_WORKSPACE/binaries/$TARGET_ABI/auditd
+
+    - name: Build forensikmediator
+      run: |
+        cd audit_system_components/src
+        
+        # 直接编译 forensikmediator
+        $TOOLCHAIN$TARGET-clang \
+          -I../include \
+          -D_GNU_SOURCE \
+          forensikmediator.c \
+          -o $GITHUB_WORKSPACE/binaries/$TARGET_ABI/forensikmediator
+        
+        strip $GITHUB_WORKSPACE/binaries/$TARGET_ABI/forensikmediator
+
+    - name: Build audit-dispatch
+      run: |
+        cd audit_system_components/src
+        
+        # 直接编译 audit-dispatch
+        $TOOLCHAIN$TARGET-clang \
+          -I../include \
+          -D_GNU_SOURCE \
+          audit-dispatch.c \
+          -o $GITHUB_WORKSPACE/binaries/$TARGET_ABI/audit-dispatch
+        
+        strip $GITHUB_WORKSPACE/binaries/$TARGET_ABI/audit-dispatch
+
+    # 4. 收集并上传二进制文件
+    - name: Upload binaries
       uses: actions/upload-artifact@v4
       with:
-        name: auditd_deployment_${{ env.TARGET_ABI }}_${{ env.BUILD_TYPE }}
-        path: |
-          auditd_deploy_*.zip
+        name: auditd_binaries_${{ env.TARGET_ABI }}
+        path: binaries/${{ env.TARGET_ABI }}/*
