@@ -40,35 +40,42 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    # 2. 设置 JDK 17 (修复：从11升级到17)
+    # 2. 设置 JDK 17
     - name: Set up JDK 17
       uses: actions/setup-java@v3
       with:
         java-version: '17'
         distribution: 'temurin'
 
-    # 3. 安装 Android SDK 和 NDK (修复：使用替代方案)
+    # 3. 修复：正确安装 Android SDK 和 NDK
     - name: Setup Android SDK and NDK
       run: |
-        # 安装命令行工具
+        # 创建 SDK 目录
+        mkdir -p android-sdk
+        
+        # 下载命令行工具
         wget https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
         unzip commandlinetools-linux-*.zip -d cmdline-tools
-        mkdir -p android-sdk
-        mv cmdline-tools android-sdk/cmdline-tools
         
-        # 设置环境变量
-        echo "ANDROID_HOME=$PWD/android-sdk" >> $GITHUB_ENV
-        echo "PATH=$PWD/android-sdk/cmdline-tools/bin:$PATH" >> $GITHUB_ENV
+        # 修复：正确组织目录结构
+        mkdir -p android-sdk/cmdline-tools/latest
+        mv cmdline-tools/cmdline-tools/* android-sdk/cmdline-tools/latest/
+        rm -rf cmdline-tools
+        
+        # 设置环境变量（当前步骤内生效）
+        export ANDROID_HOME=$PWD/android-sdk
+        export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$PATH
         
         # 接受许可
         yes | sdkmanager --licenses
         
         # 安装指定版本的 NDK
-        sdkmanager "ndk;25.1.8937393" --channel=0
+        sdkmanager "ndk;25.1.8937393"
         
-        # 设置 NDK 路径
-        echo "NDK_HOME=$PWD/android-sdk/ndk/25.1.8937393" >> $GITHUB_ENV
-        echo "PATH=$PWD/android-sdk/ndk/25.1.8937393:$PATH" >> $GITHUB_ENV
+        # 设置环境变量供后续步骤使用
+        echo "NDK_HOME=$ANDROID_HOME/ndk/25.1.8937393" >> $GITHUB_ENV
+        echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
+        echo "PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/ndk/25.1.8937393:$PATH" >> $GITHUB_ENV
 
     # 4. 设置构建类型变量
     - name: Set Gradle build type
@@ -84,6 +91,10 @@ jobs:
       run: |
         echo "Building for $TARGET_ABI ($BUILD_TYPE)"
         export APP_ABI=$TARGET_ABI
+        
+        # 确保 NDK 路径正确
+        echo "NDK_HOME=$NDK_HOME"
+        ls -l $NDK_HOME
         
         cd auditd && ./build.sh
         cd ../forensikmediator && ./build.sh
