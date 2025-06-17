@@ -31,10 +31,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
     
-    strategy:
-      matrix:
-        abi: ${{ github.event.inputs.target_abi || 'arm64-v8a' }}
-        build_type: ${{ github.event.inputs.build_type || 'debug' }}
+    # 移除矩阵策略，改用直接的环境变量设置
+    env:
+      TARGET_ABI: ${{ github.event.inputs.target_abi || 'arm64-v8a' }}
+      BUILD_TYPE: ${{ github.event.inputs.build_type || 'debug' }}
 
     steps:
     # 1. 检出代码
@@ -54,22 +54,15 @@ jobs:
       with:
         ndk-version: '25.1.8937393'
 
-    # 4. 修复：使用条件表达式替代三元运算符
-    - name: Set environment variables
+    # 4. 设置构建类型变量
+    - name: Set Gradle build type
+      id: set_gradle_type
       run: |
-        echo "NDK_HOME=$ANDROID_NDK_ROOT" >> $GITHUB_ENV
-        echo "PATH=$ANDROID_NDK_ROOT:$PATH" >> $GITHUB_ENV
-        echo "TARGET_ABI=${{ matrix.abi }}" >> $GITHUB_ENV
-        echo "BUILD_TYPE=${{ matrix.build_type }}" >> $GITHUB_ENV
-        
-        # 修复：使用 if-else 替代三元运算符
-        if [ "${{ matrix.build_type }}" = "release" ]; then
+        if [ "$BUILD_TYPE" = "release" ]; then
           echo "GRADLE_BUILD_TYPE=Release" >> $GITHUB_ENV
         else
           echo "GRADLE_BUILD_TYPE=Debug" >> $GITHUB_ENV
         fi
-        
-        echo "NDK_ABI=${{ matrix.abi }}" >> $GITHUB_ENV
 
     # 5. 编译原生组件
     - name: Build native binaries
@@ -98,7 +91,7 @@ jobs:
     - name: Upload artifacts
       uses: actions/upload-artifact@v3
       with:
-        name: auditd_binaries_${{ matrix.abi }}_${{ matrix.build_type }}
+        name: auditd_binaries_${{ env.TARGET_ABI }}_${{ env.BUILD_TYPE }}
         path: |
           auditd/libs/
           forensikmediator/libs/
