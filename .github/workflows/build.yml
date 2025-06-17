@@ -40,12 +40,13 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    # 2. 设置兼容的 JDK 版本
-    - name: Set up JDK 8
+    # 2. 设置 Java 11 用于 Android SDK 工具
+    - name: Set up JDK 11 for Android SDK
       uses: actions/setup-java@v3
       with:
-        java-version: '8'  # 使用兼容 Gradle 4.1 的 JDK 8
+        java-version: '11'
         distribution: 'temurin'
+        cache: 'gradle'
 
     # 3. 安装 Android SDK 和 NDK
     - name: Setup Android SDK and NDK
@@ -54,8 +55,8 @@ jobs:
         mkdir -p android-sdk
         
         # 下载命令行工具
-        wget https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
-        unzip commandlinetools-linux-*.zip -d cmdline-tools
+        wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
+        unzip -q commandlinetools-linux-*.zip -d cmdline-tools
         
         # 组织目录结构
         mkdir -p android-sdk/cmdline-tools/latest
@@ -67,7 +68,7 @@ jobs:
         export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$PATH
         
         # 接受许可
-        yes | sdkmanager --licenses
+        yes | sdkmanager --licenses >/dev/null 2>&1
         
         # 安装指定版本的 NDK
         sdkmanager "ndk;25.1.8937393"
@@ -77,38 +78,36 @@ jobs:
         echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
         echo "PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/ndk/25.1.8937393:$PATH" >> $GITHUB_ENV
 
-    # 4. 设置构建类型变量
-    - name: Set Gradle build type
-      run: |
-        if [ "$BUILD_TYPE" = "release" ]; then
-          echo "GRADLE_BUILD_TYPE=Release" >> $GITHUB_ENV
-        else
-          echo "GRADLE_BUILD_TYPE=Debug" >> $GITHUB_ENV
-        fi
-
-    # 5. 编译原生组件
+    # 4. 构建原生组件 (auditd, forensikmediator, audit-dispatch)
     - name: Build native binaries
       run: |
-        echo "Building for $TARGET_ABI ($BUILD_TYPE)"
+        echo "Building native components for $TARGET_ABI"
         export APP_ABI=$TARGET_ABI
         
-        # 确保在项目根目录
-        cd $GITHUB_WORKSPACE
-        
-        # 编译所有组件
-        cd auditd && ./build.sh
-        cd ..
-        cd forensikmediator && ./build.sh
-        cd ..
-        cd audit-dispatch && ./build.sh
-        cd ..
-        
-        find . -name "*.so" -o -name "auditd" -o -name "forensikmediator" -o -name "audit-dispatch"
+        # 构建所有原生组件
+        components=("auditd" "forensikmediator" "audit-dispatch")
+        for component in "${components[@]}"; do
+          echo "Building $component..."
+          cd $GITHUB_WORKSPACE/$component
+          
+          # 使用 ndk-build 编译
+          $NDK_HOME/ndk-build NDK_APPLICATION_MK=./Application.mk
+          
+          # 检查输出文件
+          ls -l libs/$TARGET_ABI/
+        done
 
-    # 6. 构建 Android APK
+    # 5. 切换到 Java 8 用于构建 Android 应用
+    - name: Set up JDK 8 for Gradle
+      uses: actions/setup-java@v3
+      with:
+        java-version: '8'
+        distribution: 'temurin'
+        cache: 'gradle'
+
+    # 6. 构建 Android 应用 (AndroidForensik)
     - name: Build Android APK
       run: |
-        # 确保在项目根目录
         cd $GITHUB_WORKSPACE
         
         # 查找 Android 应用目录
@@ -118,9 +117,6 @@ jobs:
         elif [ -d "android-forensik" ]; then
           echo "Building APK from android-forensik directory"
           cd android-forensik
-        elif [ -d "app" ]; then
-          echo "Building APK from app directory"
-          cd app
         else
           echo "Error: Could not find Android application directory"
           ls -la
@@ -131,18 +127,69 @@ jobs:
         chmod +x gradlew
         
         # 使用 JDK 8 运行 Gradle
-        ./gradlew assemble$GRADLE_BUILD_TYPE
+        ./gradlew assemble$BUILD_TYPE
         
         # 列出生成的 APK
         find . -name "*.apk"
 
-    # 7. 上传构建产物
+    # 7. 准备部署包
+    - name: Prepare deployment package
+      run: |
+        # 创建部署目录
+        DEPLOY_DIR="auditd_deploy_${{ env.TARGET_ABI }}_${{ env.BUILD_TYPE }}"
+        mkdir -p $DEPLOY_DIR/system/bin
+        
+        # 复制原生二进制文件
+        cp auditd/libs/$TARGET_ABI/auditd $DEPLOY_DIR/system/bin/
+        cp forensikmediator/libs/$TARGET_ABI/forensikmediator $DEPLOY_DIR/system/bin/
+        cp audit-dispatch/libs/$TARGET_ABI/audit-dispatch $DEPLOY_DIR/system/bin/
+        
+        # 复制 APK 文件
+        find . -path "*/app/build/outputs/apk/$BUILD_TYPE/*.apk" -exec cp {} $DEPLOY_DIR/ \;
+        
+        # 创建 SQLite 迁移脚本
+        cat > $DEPLOY_DIR/migrate_to_sqlite.sh <<'EOF'
+        #!/system/bin/sh
+        
+        # 创建 SQLite 数据库
+        SQLITE_DB="/data/audit_events.db"
+        sqlite3 $SQLITE_DB "CREATE TABLE IF NOT EXISTS audit_events (
+            id INTEGER PRIMARY KEY,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+            uid INTEGER,
+            pid INTEGER,
+            syscall INTEGER,
+            result TEXT,
+            details TEXT
+        );"
+        
+        # 迁移现有日志到数据库
+        if [ -f "/storage/audit_stream.txt" ]; then
+            while IFS= read -r line; do
+                # 解析日志行并插入数据库
+                # 这里需要根据实际日志格式实现解析逻辑
+                sqlite3 $SQLITE_DB "INSERT INTO audit_events (details) VALUES ('$line');"
+            done < "/storage/audit_stream.txt"
+            
+            # 备份原始日志
+            mv "/storage/audit_stream.txt" "/storage/audit_stream.txt.backup"
+        fi
+        
+        # 修改 audit-dispatch 使用 SQLite
+        sed -i 's|/storage/audit_stream.txt|sqlite:///data/audit_events.db|' /system/bin/audit-dispatch
+        
+        echo "Migration to SQLite completed!"
+        EOF
+        
+        chmod +x $DEPLOY_DIR/migrate_to_sqlite.sh
+        
+        # 打包部署文件
+        zip -r $DEPLOY_DIR.zip $DEPLOY_DIR
+
+    # 8. 上传构建产物
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: auditd_binaries_${{ env.TARGET_ABI }}_${{ env.BUILD_TYPE }}
+        name: auditd_deployment_${{ env.TARGET_ABI }}_${{ env.BUILD_TYPE }}
         path: |
-          auditd/libs/
-          forensikmediator/libs/
-          audit-dispatch/libs/
-          */app/build/outputs/apk/$GRADLE_BUILD_TYPE/
+          auditd_deploy_*.zip
