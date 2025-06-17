@@ -83,24 +83,31 @@ jobs:
         # 修复1: 允许缺失依赖
         echo "APP_ALLOW_MISSING_DEPS=true" >> $GITHUB_ENV
         
-        # 修复2: 修正 Android.mk 文件，移除头文件
+        # 修复2: 修正 Android.mk 文件
         cd auditd_port/ausearch
         
         # 备份原始文件
         cp Android.mk Android.mk.bak
         
+        # 修复: 移除不存在的 libcutils4ndk 引用
+        sed -i '/include \.\.\/libcutils4ndk\/Android\.mk/d' Android.mk
+        
         # 移除所有 .h 文件
         sed -i '/\.h/d' Android.mk
         
-        # 添加缺失的 cutils 依赖（如果可用）
+        # 添加系统 cutils 库支持
         if grep -q "libcutils" Android.mk; then
           echo "libcutils already in Android.mk"
         else
-          echo "LOCAL_SHARED_LIBRARIES += libcutils" >> Android.mk
+          echo "LOCAL_LDLIBS += -lcutils" >> Android.mk
         fi
         
         # 确保只包含 .c 文件
         sed -i '/LOCAL_SRC_FILES := \\/,/)/ {/\.h/d}' Android.mk
+        
+        # 移除非源文件 (auparse.pc.in, expression-design.txt)
+        sed -i '/auparse\.pc\.in/d' Android.mk
+        sed -i '/expression-design\.txt/d' Android.mk
         
         cd $GITHUB_WORKSPACE
 
@@ -128,6 +135,8 @@ jobs:
         cp Android.mk Android.mk.bak
         sed -i '/\.h/d' Android.mk
         sed -i '/LOCAL_SRC_FILES := \\/,/)/ {/\.h/d}' Android.mk
+        sed -i '/auparse\.pc\.in/d' Android.mk
+        sed -i '/expression-design\.txt/d' Android.mk
         
         $NDK_HOME/ndk-build NDK_PROJECT_PATH=$(pwd) APP_ALLOW_MISSING_DEPS=$APP_ALLOW_MISSING_DEPS NDK_APPLICATION_MK=./Application.mk
         cd ..
@@ -172,7 +181,6 @@ jobs:
         # 创建部署目录
         DEPLOY_DIR="auditd_deploy_${{ env.TARGET_ABI }}_${{ env.BUILD_TYPE }}"
         mkdir -p $DEPLOY_DIR/system/bin
-        mkdir -p $DEPLOY_DIR/system/lib
         
         # 复制原生二进制文件
         # ausearch
@@ -183,11 +191,6 @@ jobs:
         
         # audit_system_components (包含auditd, forensikmediator, audit-dispatch)
         cp audit_system_components/libs/$TARGET_ABI/* $DEPLOY_DIR/system/bin/
-        
-        # 复制可能的共享库
-        if [ -f "auditd_port/ausearch/obj/local/$TARGET_ABI/libcutils.so" ]; then
-          cp auditd_port/ausearch/obj/local/$TARGET_ABI/libcutils.so $DEPLOY_DIR/system/lib/
-        fi
         
         # 复制 APK 文件
         find app -path "*/build/outputs/apk/$BUILD_TYPE/*.apk" -exec cp {} $DEPLOY_DIR/ \;
