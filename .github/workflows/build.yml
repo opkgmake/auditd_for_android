@@ -77,164 +77,36 @@ jobs:
         echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
         echo "PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/ndk/25.1.8937393:$PATH" >> $GITHUB_ENV
 
-    # 4. 彻底修复 ausearch 构建问题
-    - name: Fix ausearch build issues
+    # 4. 修复 NDK 构建路径问题
+    - name: Fix NDK build paths
       run: |
-        # 修复1: 允许缺失依赖
-        echo "APP_ALLOW_MISSING_DEPS=true" >> $GITHUB_ENV
+        # 为每个组件创建 jni 目录
+        mkdir -p auditd_port/ausearch/jni
+        mkdir -p auditd_port/auparse/jni
+        mkdir -p audit_system_components/jni
         
-        # 修复2: 完全重写 Android.mk
-        cd auditd_port/ausearch
+        # 移动 ausearch 构建文件
+        mv auditd_port/ausearch/Android.mk auditd_port/ausearch/jni/
+        mv auditd_port/ausearch/Application.mk auditd_port/ausearch/jni/
         
-        # 创建新的 Android.mk
-        cat > Android.mk <<'EOF'
-        LOCAL_PATH := $(call my-dir)
-        include $(CLEAR_VARS)
+        # 移动 auparse 构建文件
+        mv auditd_port/auparse/Android.mk auditd_port/auparse/jni/
+        mv auditd_port/auparse/Application.mk auditd_port/auparse/jni/
         
-        # 基本配置
-        LOCAL_MODULE := ausearch
-        LOCAL_SRC_FILES := \
-            src/ausearch-avc.c \
-            src/ausearch-checkpt.c \
-            src/ausearch-common.c \
-            src/ausearch-int.c \
-            src/ausearch-llist.c \
-            src/ausearch-lol.c \
-            src/ausearch-lookup.c \
-            src/ausearch-nvpair.c \
-            src/ausearch-options.c \
-            src/ausearch-parse.c \
-            src/ausearch-string.c \
-            src/ausearch-time.c \
-            src/ausearch.c
-        
-        # 包含路径
-        LOCAL_C_INCLUDES := \
-            $(LOCAL_PATH)/include \
-            $(LOCAL_PATH)/../auparse \
-            $(NDK_HOME)/sysroot/usr/include
-        
-        # 链接系统库
-        LOCAL_LDLIBS := -lcutils -llog
-        
-        # 编译选项
-        LOCAL_CFLAGS := -D_GNU_SOURCE -DUSE_AUPRIVATE_H -DNDEBUG
-        LOCAL_CONLYFLAGS := -std=c99
-        
-        include $(BUILD_EXECUTABLE)
-        EOF
-        
-        # 移除旧的 Application.mk 如果存在
-        [ -f Application.mk ] && rm Application.mk
-        
-        # 创建新的 Application.mk
-        cat > Application.mk <<'EOF'
-        APP_PLATFORM := android-21
-        APP_ABI := $(TARGET_ABI)
-        APP_ALLOW_MISSING_DEPS := true
-        APP_STL := c++_static
-        APP_CPPFLAGS := -std=c++11
-        EOF
-        
-        cd $GITHUB_WORKSPACE
-
-    # 5. 修复 auparse 构建问题
-    - name: Fix auparse build issues
-      run: |
-        cd auditd_port/auparse
-        
-        # 创建新的 Android.mk
-        cat > Android.mk <<'EOF'
-        LOCAL_PATH := $(call my-dir)
-        include $(CLEAR_VARS)
-        
-        # 基本配置
-        LOCAL_MODULE := auparse
-        LOCAL_SRC_FILES := \
-            src/auparse.c \
-            src/auparse-idata.c \
-            src/ellist.c \
-            src/expression.c \
-            src/interpret.c \
-            src/lru.c \
-            src/normalize.c \
-            src/nvlist.c \
-            src/rnode.c \
-            src/strsplit.c \
-            src/idata.c
-        
-        # 包含路径
-        LOCAL_C_INCLUDES := \
-            $(LOCAL_PATH)/include \
-            $(NDK_HOME)/sysroot/usr/include
-        
-        # 链接系统库
-        LOCAL_LDLIBS := -llog
-        
-        # 编译选项
-        LOCAL_CFLAGS := -D_GNU_SOURCE -DNDEBUG
-        LOCAL_CONLYFLAGS := -std=c99
-        
-        include $(BUILD_EXECUTABLE)
-        EOF
-        
-        # 移除旧的 Application.mk 如果存在
-        [ -f Application.mk ] && rm Application.mk
-        
-        # 创建新的 Application.mk
-        cat > Application.mk <<'EOF'
-        APP_PLATFORM := android-21
-        APP_ABI := $(TARGET_ABI)
-        APP_ALLOW_MISSING_DEPS := true
-        APP_STL := c++_static
-        APP_CPPFLAGS := -std=c++11
-        EOF
-        
-        cd $GITHUB_WORKSPACE
-
-    # 6. 构建原生组件
-    - name: Build native binaries
-      run: |
-        echo "Building native components for $TARGET_ABI"
-        export APP_ABI=$TARGET_ABI
-        export NDK_PROJECT_PATH=$GITHUB_WORKSPACE
-        
-        # 进入auditd_port目录构建ausearch和auparse
-        cd auditd_port
-        
-        # 构建ausearch
-        echo "Building ausearch..."
-        cd ausearch
-        $NDK_HOME/ndk-build NDK_PROJECT_PATH=$(pwd) APP_ALLOW_MISSING_DEPS=true
-        cd ..
-        
-        # 构建auparse
-        echo "Building auparse..."
-        cd auparse
-        $NDK_HOME/ndk-build NDK_PROJECT_PATH=$(pwd) APP_ALLOW_MISSING_DEPS=true
-        cd ..
-        
-        # 返回到项目根目录
-        cd ..
-        
-        # 构建audit_system_components
-        echo "Building audit_system_components..."
-        cd audit_system_components
-        
-        # 简化其 Android.mk
-        cat > Android.mk <<'EOF'
+        # 为 audit_system_components 创建构建文件
+        cat > audit_system_components/jni/Android.mk <<'EOF'
         LOCAL_PATH := $(call my-dir)
         include $(CLEAR_VARS)
         
         LOCAL_MODULE := audit_system
         LOCAL_SRC_FILES := \
-            src/main.c \
-            src/auditd.c \
-            src/forensikmediator.c \
-            src/audit-dispatch.c
+            ../src/main.c \
+            ../src/auditd.c \
+            ../src/forensikmediator.c \
+            ../src/audit-dispatch.c
         
         LOCAL_C_INCLUDES := \
-            $(LOCAL_PATH)/include \
+            $(LOCAL_PATH)/../include \
             $(NDK_HOME)/sysroot/usr/include
         
         LOCAL_LDLIBS := -llog -lcutils
@@ -242,20 +114,48 @@ jobs:
         include $(BUILD_EXECUTABLE)
         EOF
         
+        cat > audit_system_components/jni/Application.mk <<'EOF'
+        APP_PLATFORM := android-21
+        APP_ABI := $(TARGET_ABI)
+        APP_ALLOW_MISSING_DEPS := true
+        APP_STL := c++_static
+        EOF
+
+    # 5. 构建原生组件
+    - name: Build native binaries
+      run: |
+        echo "Building native components for $TARGET_ABI"
+        export APP_ABI=$TARGET_ABI
+        
+        # 构建ausearch
+        echo "Building ausearch..."
+        cd auditd_port/ausearch
+        $NDK_HOME/ndk-build NDK_PROJECT_PATH=$(pwd)
+        cd ../..
+        
+        # 构建auparse
+        echo "Building auparse..."
+        cd auditd_port/auparse
+        $NDK_HOME/ndk-build NDK_PROJECT_PATH=$(pwd)
+        cd ../..
+        
+        # 构建audit_system_components
+        echo "Building audit_system_components..."
+        cd audit_system_components
         $NDK_HOME/ndk-build NDK_PROJECT_PATH=$(pwd)
         cd ..
         
         # 列出所有生成的二进制文件
         find . -name "ausearch" -o -name "auparse" -o -name "audit_system"
 
-    # 7. 切换到 Java 8 用于构建 Android 应用
+    # 6. 切换到 Java 8 用于构建 Android 应用
     - name: Set up JDK 8 for Gradle
       uses: actions/setup-java@v3
       with:
         java-version: '8'
         distribution: 'temurin'
 
-    # 8. 构建 Android 应用
+    # 7. 构建 Android 应用
     - name: Build Android APK
       run: |
         echo "Building Android APK..."
@@ -270,7 +170,7 @@ jobs:
         # 列出生成的 APK
         find . -name "*.apk"
 
-    # 9. 准备部署包
+    # 8. 准备部署包
     - name: Prepare deployment package
       run: |
         # 创建部署目录
@@ -349,7 +249,7 @@ jobs:
         # 打包部署文件
         zip -r $DEPLOY_DIR.zip $DEPLOY_DIR
 
-    # 10. 上传构建产物
+    # 9. 上传构建产物
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
