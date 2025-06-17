@@ -1,7 +1,6 @@
 name: Android Auditd CI
 
 on:
-  # 添加 workflow_dispatch 以支持手动触发
   workflow_dispatch:
     inputs:
       build_type:
@@ -32,7 +31,6 @@ jobs:
   build:
     runs-on: ubuntu-latest
     
-    # 使用手动触发输入的参数
     strategy:
       matrix:
         abi: ${{ github.event.inputs.target_abi || 'arm64-v8a' }}
@@ -56,7 +54,7 @@ jobs:
       with:
         ndk-version: '25.1.8937393'
 
-    # 4. 配置环境变量（添加手动触发参数）
+    # 4. 修复：使用条件表达式替代三元运算符
     - name: Set environment variables
       run: |
         echo "NDK_HOME=$ANDROID_NDK_ROOT" >> $GITHUB_ENV
@@ -64,11 +62,16 @@ jobs:
         echo "TARGET_ABI=${{ matrix.abi }}" >> $GITHUB_ENV
         echo "BUILD_TYPE=${{ matrix.build_type }}" >> $GITHUB_ENV
         
-        # 设置构建参数
-        echo "GRADLE_BUILD_TYPE=${{ matrix.build_type == 'release' ? 'Release' : 'Debug' }}" >> $GITHUB_ENV
+        # 修复：使用 if-else 替代三元运算符
+        if [ "${{ matrix.build_type }}" = "release" ]; then
+          echo "GRADLE_BUILD_TYPE=Release" >> $GITHUB_ENV
+        else
+          echo "GRADLE_BUILD_TYPE=Debug" >> $GITHUB_ENV
+        fi
+        
         echo "NDK_ABI=${{ matrix.abi }}" >> $GITHUB_ENV
 
-    # 5. 编译原生组件（使用手动触发的参数）
+    # 5. 编译原生组件
     - name: Build native binaries
       run: |
         echo "Building for $TARGET_ABI ($BUILD_TYPE)"
@@ -84,7 +87,7 @@ jobs:
         # 列出生成的二进制文件
         find . -name "*.so" -o -name "auditd" -o -name "forensikmediator" -o -name "audit-dispatch"
 
-    # 6. 编译 Android 应用（使用手动触发的参数）
+    # 6. 编译 Android 应用
     - name: Build Android APK
       run: |
         cd AndroidForensik
@@ -101,20 +104,3 @@ jobs:
           forensikmediator/libs/
           audit-dispatch/libs/
           AndroidForensik/app/build/outputs/apk/$GRADLE_BUILD_TYPE/
-          
-    # 8. 添加通知（可选）
-    - name: Notify on completion
-      if: ${{ always() }}
-      uses: actions/github-script@v6
-      with:
-        script: |
-          const status = job.status == 'success' ? '✅ 成功' : '❌ 失败'
-          github.rest.issues.createComment({
-            issue_number: context.issue.number,
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            body: `构建结果: ${status}\n` +
-                   `架构: ${{ matrix.abi }}\n` +
-                   `类型: ${{ matrix.build_type }}\n` +
-                   `[查看日志](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`
-          })
